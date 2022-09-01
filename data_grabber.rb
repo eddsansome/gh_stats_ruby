@@ -13,13 +13,11 @@ PullRequest = Struct.new(:number, :title, :merged_at, :created_at, :reviews) do
 	end
 
 	def cycle_time
-        created = Time.parse(created_at)
-		merged = Time.parse(merged_at)
-		((merged - created).to_f / 3600).round(2)
+		((merged_at - created_at).to_f / 3600).round(2)
 	end
 
 	def csv_line
-		"#{number},#{title},#{unique_approvers},#{Time.parse(created_at).to_date},#{Time.parse(merged_at).to_date},#{cycle_time}"
+		"#{number},#{title.gsub(",","")},#{unique_approvers},#{created_at.to_date},#{merged_at.to_date},#{cycle_time}"
 	end
 end
 
@@ -31,9 +29,15 @@ class DataGrabber
   def call
     @token = ENV["TOKEN"]
 
-    pull_requests(nil, @prs)
+    prs = pull_requests(nil, [])
 
-    
+	puts "number,title,approvers,created_at,merged_at,cycle_time(hours)"
+	prs.sort_by {|pr| pr.merged_at.to_datetime }
+	    .each do |pr|
+		if pr.merged_at.to_date >= Date.new(2022,8,1) && pr.merged_at.to_date < Date.new(2022,9,1)
+			puts pr.csv_line
+		end 
+	end
   end
 
   def graphql_body(before)
@@ -76,6 +80,15 @@ class DataGrabber
   end
 
   def pull_requests(before, prs)
+
+	sleep 2
+
+	# guard clause
+	if prs.size > 0 && prs.last.merged_at.to_date < Date.new(2022,8,1)
+		return prs
+	end
+
+
     req = Net::HTTP::Post.new(uri, 'Content-Type' => 'application/json')
 	req.body = JSON.generate(graphql_body(before))
 
@@ -88,16 +101,18 @@ class DataGrabber
 
 	  data = JSON.parse(res.body)
 
-	  prs = data.dig("data", "repository", "pullRequests", "edges")
+	  pr_data = data.dig("data", "repository", "pullRequests", "edges")
+
 	  # PullRequest = Struct.new(:number, :title, :merged_at, :created_at, :reviewers)
-	  derp = prs.map do |pr|
+	  pr_data.each do |pr|
 		raw_pr = pr.dig("node")
-		p = PullRequest.new(raw_pr["number"], raw_pr["title"], raw_pr["mergedAt"], raw_pr["createdAt"], raw_pr["reviews"])
-		p.csv_line
+		prs << PullRequest.new(raw_pr["number"], raw_pr["title"], Time.parse(raw_pr["mergedAt"]), Time.parse(raw_pr["createdAt"]), raw_pr["reviews"])
+	
 	  end
 
-	  puts "number,title.gsub(",",""),approvers,created_at,merged_at,cycle_time(hours)"
-	  puts derp
+	  return pull_requests(data.dig("data", "repository", "pullRequests", "pageInfo", "startCursor"), prs)
+
+
 
   end
 
